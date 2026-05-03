@@ -35,6 +35,18 @@
     return undefined;
   }
   
+  function getAllDescendants(node) {
+    const ids = [node.id];
+    function traverse(n) {
+      for (const child of n.children) {
+        ids.push(child.id);
+        traverse(child);
+      }
+    }
+    traverse(node);
+    return ids;
+  }
+  
   function createMindMapStore() {
     const rootNode = createNode('中心主题', null);
     const { subscribe, update } = writable(rootNode);
@@ -151,8 +163,29 @@
   
   let editingNodeId = null;
   
-  let width = 1600;
-  let height = 1200;
+  let svgWidth = 3000;
+  let svgHeight = 2000;
+  
+  let scale = 1;
+  let panX = 0;
+  let panY = 0;
+  
+  let isPanning = false;
+  let panStartX = 0;
+  let panStartY = 0;
+  let panStartPanX = 0;
+  let panStartPanY = 0;
+  
+  let nodeManualPositions = {};
+  
+  let isDraggingNode = false;
+  let dragNodeId = null;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let dragStartPositions = {};
+  
+  let clickCount = 0;
+  let clickTimer = null;
   
   function findNodeById(node, id) {
     if (node.id === id) return node;
@@ -163,6 +196,20 @@
     return null;
   }
   
+  function getNodePosition(nodeId, layoutedNode) {
+    if (nodeManualPositions[nodeId] !== undefined) {
+      return nodeManualPositions[nodeId];
+    }
+    return { x: layoutedNode?.x ?? 0, y: layoutedNode?.y ?? 0 };
+  }
+  
+  function setNodePosition(nodeId, x, y) {
+    nodeManualPositions = {
+      ...nodeManualPositions,
+      [nodeId]: { x, y }
+    };
+  }
+  
   function startEditing(nodeId) {
     editingNodeId = nodeId;
   }
@@ -171,33 +218,163 @@
     editingNodeId = null;
   }
   
-  $: layoutedTree = layoutTree($mindMapStore, width / 2, height / 2);
+  function handleWheel(e) {
+    e.preventDefault();
+    
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    const newScale = Math.max(0.1, Math.min(3, scale * delta));
+    
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    
+    const svgMouseX = (mouseX - panX) / scale;
+    const svgMouseY = (mouseY - panY) / scale;
+    
+    panX = mouseX - svgMouseX * newScale;
+    panY = mouseY - svgMouseY * newScale;
+    scale = newScale;
+  }
+  
+  function handleCanvasMouseDown(e) {
+    const target = e.target;
+    
+    if (target.classList.contains('action-btn-hit')) {
+      return;
+    }
+    
+    const nodeGroup = target.closest('[data-node-id]');
+    if (nodeGroup) {
+      const nodeId = nodeGroup.getAttribute('data-node-id');
+      handleNodeMouseDown(e, nodeId);
+      return;
+    }
+    
+    isPanning = true;
+    panStartX = e.clientX;
+    panStartY = e.clientY;
+    panStartPanX = panX;
+    panStartPanY = panY;
+    
+    window.addEventListener('mousemove', handlePanMove);
+    window.addEventListener('mouseup', handlePanEnd);
+  }
+  
+  function handlePanMove(e) {
+    if (!isPanning) return;
+    
+    panX = panStartPanX + (e.clientX - panStartX);
+    panY = panStartPanY + (e.clientY - panStartY);
+  }
+  
+  function handlePanEnd() {
+    isPanning = false;
+    window.removeEventListener('mousemove', handlePanMove);
+    window.removeEventListener('mouseup', handlePanEnd);
+  }
+  
+  function handleNodeMouseDown(e, nodeId) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (editingNodeId === nodeId) {
+      return;
+    }
+    
+    clickCount++;
+    
+    if (clickCount === 1) {
+      clickTimer = setTimeout(() => {
+        if (clickCount === 1 && !isDraggingNode) {
+          clickCount = 0;
+        }
+      }, 250);
+    } else if (clickCount >= 2) {
+      clearTimeout(clickTimer);
+      clickCount = 0;
+      startEditing(nodeId);
+      return;
+    }
+    
+    isDraggingNode = true;
+    dragNodeId = nodeId;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    
+    const nodeInStore = findNodeById($mindMapStore, nodeId);
+    if (nodeInStore) {
+      const subtreeIds = getAllDescendants(nodeInStore);
+      
+      dragStartPositions = {};
+      for (const id of subtreeIds) {
+        const pos = getNodePosition(id, findNodeById(layoutedTree, id));
+        dragStartPositions[id] = {
+          x: pos.x,
+          y: pos.y
+        };
+      }
+    }
+    
+    window.addEventListener('mousemove', handleNodeDragMove);
+    window.addEventListener('mouseup', handleNodeDragEnd);
+  }
+  
+  function handleNodeDragMove(e) {
+    if (!isDraggingNode || !dragNodeId) return;
+    
+    const dx = (e.clientX - dragStartX) / scale;
+    const dy = (e.clientY - dragStartY) / scale;
+    
+    for (const [nodeId, startPos] of Object.entries(dragStartPositions)) {
+      const newX = startPos.x + dx;
+      const newY = startPos.y + dy;
+      setNodePosition(nodeId, newX, newY);
+    }
+  }
+  
+  function handleNodeDragEnd() {
+    isDraggingNode = false;
+    dragNodeId = null;
+    dragStartPositions = {};
+    clickCount = 0;
+    
+    window.removeEventListener('mousemove', handleNodeDragMove);
+    window.removeEventListener('mouseup', handleNodeDragEnd);
+  }
+  
+  $: layoutedTree = layoutTree($mindMapStore, svgWidth / 2, svgHeight / 2);
   $: nodes = $flatNodes.map(node => {
     const layoutedNode = findNodeById(layoutedTree, node.id);
+    const pos = getNodePosition(node.id, layoutedNode);
     return {
       ...node,
-      x: layoutedNode?.x ?? node.x,
-      y: layoutedNode?.y ?? node.y
+      x: pos.x,
+      y: pos.y
     };
   });
   $: conns = $connections.map(conn => {
     const fromLayouted = findNodeById(layoutedTree, conn.from.id);
     const toLayouted = findNodeById(layoutedTree, conn.to.id);
+    const fromPos = getNodePosition(conn.from.id, fromLayouted);
+    const toPos = getNodePosition(conn.to.id, toLayouted);
     return {
-      from: { ...conn.from, x: fromLayouted?.x ?? conn.from.x, y: fromLayouted?.y ?? conn.from.y },
-      to: { ...conn.to, x: toLayouted?.x ?? conn.to.x, y: toLayouted?.y ?? conn.to.y }
+      from: { ...conn.from, x: fromPos.x, y: fromPos.y },
+      to: { ...conn.to, x: toPos.x, y: toPos.y }
     };
   });
 </script>
 
 <main>
-  <div class="mind-map-container">
+  <div 
+    class="mind-map-container"
+    on:wheel={handleWheel}
+    on:mousedown={handleCanvasMouseDown}
+  >
     <svg
-      width={width}
-      height={height}
-      viewBox={`0 0 ${width} ${height}`}
+      width={svgWidth}
+      height={svgHeight}
+      style="transform: translate({panX}px, {panY}px) scale({scale}); transform-origin: 0 0;"
     >
-      <!-- 背景网格 -->
       <defs>
         <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
           <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#e2e8f0" stroke-width="0.5" />
@@ -205,7 +382,6 @@
       </defs>
       <rect width="100%" height="100%" fill="url(#grid)" />
       
-      <!-- 连接线 -->
       {#each conns as conn}
         {@const fromX = conn.from.x + conn.from.width / 2}
         {@const fromY = conn.from.y}
@@ -221,10 +397,12 @@
         />
       {/each}
       
-      <!-- 节点 -->
       {#each nodes as node (node.id)}
-        <g transform={`translate(${node.x - node.width / 2}, ${node.y - node.height / 2})`}>
-          <!-- 节点背景 -->
+        <g 
+          transform={`translate(${node.x - node.width / 2}, ${node.y - node.height / 2})`}
+          data-node-id={node.id}
+          class="node-group"
+        >
           <rect
             class="node-rect"
             width={node.width}
@@ -236,7 +414,6 @@
             stroke-width={2}
           />
           
-          <!-- 节点文本 -->
           {#if editingNodeId === node.id}
             <foreignObject width={node.width} height={node.height}>
               <div class="edit-container">
@@ -269,26 +446,21 @@
               fill={node.isRoot ? 'white' : '#1e293b'}
               font-size={node.isRoot ? 16 : 14}
               font-weight={node.isRoot ? 'bold' : 'normal'}
-              on:dblclick={() => startEditing(node.id)}
             >
               {node.text}
             </text>
           {/if}
           
-          <!-- 操作按钮 -->
           <g>
-            <!-- 添加子节点按钮 -->
             <g class="action-btn-group">
-              <!-- 隐藏的大圆形作为点击区域 -->
               <circle
                 class="action-btn-hit"
                 cx={node.width + 12}
                 cy={node.height / 2}
                 r={12}
                 fill="transparent"
-                on:click={() => mindMapStore.addChild(node.id)}
+                on:click|stopPropagation={() => mindMapStore.addChild(node.id)}
               />
-              <!-- 可见的按钮 -->
               <circle
                 class="action-btn action-btn-add"
                 cx={node.width + 12}
@@ -313,19 +485,16 @@
               </text>
             </g>
             
-            <!-- 删除按钮 (非根节点) -->
             {#if !node.isRoot}
               <g class="action-btn-group">
-                <!-- 隐藏的大圆形作为点击区域 -->
                 <circle
                   class="action-btn-hit"
                   cx={node.width + 12}
                   cy={node.height / 2 + 20}
                   r={12}
                   fill="transparent"
-                  on:click={() => mindMapStore.deleteNode(node.id)}
+                  on:click|stopPropagation={() => mindMapStore.deleteNode(node.id)}
                 />
-                <!-- 可见的按钮 -->
                 <circle
                   class="action-btn action-btn-delete"
                   cx={node.width + 12}
@@ -368,16 +537,29 @@
   .mind-map-container {
     width: 100vw;
     height: 100vh;
-    overflow: auto;
+    overflow: hidden;
     background-color: #f8fafc;
+    cursor: grab;
+  }
+  
+  .mind-map-container:active {
+    cursor: grabbing;
   }
   
   svg {
     display: block;
   }
   
+  .node-group {
+    cursor: grab;
+  }
+  
+  .node-group:active {
+    cursor: grabbing;
+  }
+  
   .node-rect {
-    cursor: pointer;
+    cursor: inherit;
     transition: all 0.2s ease;
   }
   
@@ -386,7 +568,7 @@
   }
   
   .node-text {
-    cursor: pointer;
+    cursor: inherit;
     user-select: none;
   }
   
