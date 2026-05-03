@@ -278,44 +278,30 @@
           <!-- 操作按钮 -->
           <g>
             <!-- 添加子节点按钮 -->
-            <circle
-              class="action-btn"
-              cx={node.width + 12}
-              cy={node.height / 2}
-              r={8}
-              fill="#22c55e"
-              stroke="#16a34a"
-              stroke-width={1.5}
-              on:click={() => mindMapStore.addChild(node.id)}
-            />
-            <text
-              x={node.width + 12}
-              y={node.height / 2}
-              text-anchor="middle"
-              dominant-baseline="middle"
-              fill="white"
-              font-size={14}
-              font-weight="bold"
-              pointer-events="none"
-            >
-              +
-            </text>
-            
-            <!-- 删除按钮 (非根节点) -->
-            {#if !node.isRoot}
+            <g class="action-btn-group">
+              <!-- 隐藏的大圆形作为点击区域 -->
               <circle
-                class="action-btn"
+                class="action-btn-hit"
                 cx={node.width + 12}
-                cy={node.height / 2 + 20}
+                cy={node.height / 2}
+                r={12}
+                fill="transparent"
+                on:click={() => mindMapStore.addChild(node.id)}
+              />
+              <!-- 可见的按钮 -->
+              <circle
+                class="action-btn action-btn-add"
+                cx={node.width + 12}
+                cy={node.height / 2}
                 r={8}
-                fill="#ef4444"
-                stroke="#dc2626"
+                fill="#22c55e"
+                stroke="#16a34a"
                 stroke-width={1.5}
-                on:click={() => mindMapStore.deleteNode(node.id)}
+                pointer-events="none"
               />
               <text
                 x={node.width + 12}
-                y={node.height / 2 + 20}
+                y={node.height / 2}
                 text-anchor="middle"
                 dominant-baseline="middle"
                 fill="white"
@@ -323,8 +309,46 @@
                 font-weight="bold"
                 pointer-events="none"
               >
-                ×
+                +
               </text>
+            </g>
+            
+            <!-- 删除按钮 (非根节点) -->
+            {#if !node.isRoot}
+              <g class="action-btn-group">
+                <!-- 隐藏的大圆形作为点击区域 -->
+                <circle
+                  class="action-btn-hit"
+                  cx={node.width + 12}
+                  cy={node.height / 2 + 20}
+                  r={12}
+                  fill="transparent"
+                  on:click={() => mindMapStore.deleteNode(node.id)}
+                />
+                <!-- 可见的按钮 -->
+                <circle
+                  class="action-btn action-btn-delete"
+                  cx={node.width + 12}
+                  cy={node.height / 2 + 20}
+                  r={8}
+                  fill="#ef4444"
+                  stroke="#dc2626"
+                  stroke-width={1.5}
+                  pointer-events="none"
+                />
+                <text
+                  x={node.width + 12}
+                  y={node.height / 2 + 20}
+                  text-anchor="middle"
+                  dominant-baseline="middle"
+                  fill="white"
+                  font-size={14}
+                  font-weight="bold"
+                  pointer-events="none"
+                >
+                  ×
+                </text>
+              </g>
             {/if}
           </g>
         </g>
@@ -388,12 +412,16 @@
     box-sizing: border-box;
   }
   
-  .action-btn {
+  .action-btn-hit {
     cursor: pointer;
-    transition: transform 0.15s ease;
   }
   
-  .action-btn:hover {
-    transform: scale(1.2);
+  .action-btn-group:hover .action-btn {
+    stroke-width: 2.5;
+    filter: brightness(1.1);
+  }
+  
+  .action-btn {
+    transition: stroke-width 0.15s ease, filter 0.15s ease;
   }
 </style>
