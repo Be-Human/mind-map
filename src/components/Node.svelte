@@ -5,13 +5,74 @@
   export let isEditing = false;
   export let onEditStart;
   export let onEditEnd;
+  export let scale = 1;
+  export let onDragStart;
+  export let onDrag;
   
   let editText = node.text;
   
-  function handleDoubleClick() {
-    if (onEditStart) {
-      onEditStart(node.id);
+  let isDragging = false;
+  let dragState = null;
+  let dragStartMouseX = 0;
+  let dragStartMouseY = 0;
+  let clickTimeout = null;
+  let clickCount = 0;
+  
+  function handleMouseDown(e) {
+    if (e.target.closest('.action-btn-hit') || isEditing) {
+      return;
     }
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    clickCount++;
+    
+    if (clickCount === 1) {
+      clickTimeout = setTimeout(() => {
+        if (!isDragging && clickCount === 1) {
+          clickCount = 0;
+        }
+      }, 250);
+    } else if (clickCount >= 2) {
+      clearTimeout(clickTimeout);
+      clickCount = 0;
+      if (onEditStart) {
+        onEditStart(node.id);
+      }
+      return;
+    }
+    
+    isDragging = true;
+    dragStartMouseX = e.clientX;
+    dragStartMouseY = e.clientY;
+    
+    if (onDragStart) {
+      dragState = onDragStart(node.id);
+    }
+    
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  }
+  
+  function handleMouseMove(e) {
+    if (!isDragging) return;
+    
+    const dx = (e.clientX - dragStartMouseX) / scale;
+    const dy = (e.clientY - dragStartMouseY) / scale;
+    
+    if (dragState && onDrag) {
+      onDrag(dragState, dx, dy);
+    }
+  }
+  
+  function handleMouseUp() {
+    isDragging = false;
+    dragState = null;
+    clickCount = 0;
+    
+    window.removeEventListener('mousemove', handleMouseMove);
+    window.removeEventListener('mouseup', handleMouseUp);
   }
   
   function handleKeyDown(e) {
@@ -53,7 +114,7 @@
   $: y = node.y - node.height / 2;
 </script>
 
-<g transform={`translate(${x}, ${y})`}>
+<g transform={`translate(${x}, ${y})`} class="node-element" on:mousedown={handleMouseDown}>
   <!-- 节点背景 -->
   <rect
     class="node-rect"
@@ -88,7 +149,6 @@
       fill={node.isRoot ? 'white' : '#1e293b'}
       font-size={node.isRoot ? 16 : 14}
       font-weight={node.isRoot ? 'bold' : 'normal'}
-      on:dblclick={handleDoubleClick}
     >
       {node.text}
     </text>
@@ -173,8 +233,16 @@
 </g>
 
 <style>
+  :global(.node-element) {
+    cursor: grab;
+  }
+  
+  :global(.node-element:active) {
+    cursor: grabbing;
+  }
+  
   .node-rect {
-    cursor: pointer;
+    cursor: inherit;
     transition: all 0.2s ease;
   }
   
@@ -183,7 +251,7 @@
   }
   
   .node-text {
-    cursor: pointer;
+    cursor: inherit;
     user-select: none;
   }
   
