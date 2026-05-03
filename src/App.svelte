@@ -1,5 +1,6 @@
 <script>
-  import { writable, derived } from 'svelte/store';
+  import { writable, derived, get } from 'svelte/store';
+  import { onMount, tick } from 'svelte';
   
   let nodeIdCounter = 0;
   
@@ -161,10 +162,12 @@
     return tree;
   }
   
+  const nodePositions = writable({});
+  
   let editingNodeId = null;
   
-  let svgWidth = 3000;
-  let svgHeight = 2000;
+  let svgWidth = 2000;
+  let svgHeight = 1500;
   
   let scale = 1;
   let panX = 0;
@@ -176,8 +179,6 @@
   let panStartPanX = 0;
   let panStartPanY = 0;
   
-  let nodeManualPositions = {};
-  
   let isDraggingNode = false;
   let dragNodeId = null;
   let dragStartX = 0;
@@ -186,6 +187,8 @@
   
   let clickCount = 0;
   let clickTimer = null;
+  
+  let containerElement = null;
   
   function findNodeById(node, id) {
     if (node.id === id) return node;
@@ -197,17 +200,17 @@
   }
   
   function getNodePosition(nodeId, layoutedNode) {
-    if (nodeManualPositions[nodeId] !== undefined) {
-      return nodeManualPositions[nodeId];
+    const positions = get(nodePositions);
+    if (positions[nodeId] !== undefined) {
+      return positions[nodeId];
     }
     return { x: layoutedNode?.x ?? 0, y: layoutedNode?.y ?? 0 };
   }
   
-  function setNodePosition(nodeId, x, y) {
-    nodeManualPositions = {
-      ...nodeManualPositions,
-      [nodeId]: { x, y }
-    };
+  function setNodePositions(updates) {
+    nodePositions.update(positions => {
+      return { ...positions, ...updates };
+    });
   }
   
   function startEditing(nodeId) {
@@ -224,7 +227,9 @@
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
     const newScale = Math.max(0.1, Math.min(3, scale * delta));
     
-    const rect = e.currentTarget.getBoundingClientRect();
+    const rect = containerElement?.getBoundingClientRect();
+    if (!rect) return;
+    
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
     
@@ -301,7 +306,7 @@
     dragStartX = e.clientX;
     dragStartY = e.clientY;
     
-    const nodeInStore = findNodeById($mindMapStore, nodeId);
+    const nodeInStore = findNode($mindMapStore, nodeId);
     if (nodeInStore) {
       const subtreeIds = getAllDescendants(nodeInStore);
       
@@ -325,11 +330,15 @@
     const dx = (e.clientX - dragStartX) / scale;
     const dy = (e.clientY - dragStartY) / scale;
     
+    const updates = {};
     for (const [nodeId, startPos] of Object.entries(dragStartPositions)) {
-      const newX = startPos.x + dx;
-      const newY = startPos.y + dy;
-      setNodePosition(nodeId, newX, newY);
+      updates[nodeId] = {
+        x: startPos.x + dx,
+        y: startPos.y + dy
+      };
     }
+    
+    setNodePositions(updates);
   }
   
   function handleNodeDragEnd() {
@@ -342,31 +351,91 @@
     window.removeEventListener('mouseup', handleNodeDragEnd);
   }
   
-  $: layoutedTree = layoutTree($mindMapStore, svgWidth / 2, svgHeight / 2);
-  $: nodes = $flatNodes.map(node => {
-    const layoutedNode = findNodeById(layoutedTree, node.id);
-    const pos = getNodePosition(node.id, layoutedNode);
-    return {
-      ...node,
-      x: pos.x,
-      y: pos.y
-    };
-  });
-  $: conns = $connections.map(conn => {
-    const fromLayouted = findNodeById(layoutedTree, conn.from.id);
-    const toLayouted = findNodeById(layoutedTree, conn.to.id);
-    const fromPos = getNodePosition(conn.from.id, fromLayouted);
-    const toPos = getNodePosition(conn.to.id, toLayouted);
-    return {
-      from: { ...conn.from, x: fromPos.x, y: fromPos.y },
-      to: { ...conn.to, x: toPos.x, y: toPos.y }
-    };
+  function fitToView() {
+    const allNodes = get(flatNodes);
+    if (allNodes.length === 0) return;
+    
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    
+    for (const node of allNodes) {
+      const layoutedNode = findNodeById(layoutedTree, node.id);
+      const pos = getNodePosition(node.id, layoutedNode);
+      
+      minX = Math.min(minX, pos.x - node.width / 2);
+      maxX = Math.max(maxX, pos.x + node.width / 2);
+      minY = Math.min(minY, pos.y - node.height / 2);
+      maxY = Math.max(maxY, pos.y + node.height / 2);
+    }
+    
+    const padding = 50;
+    const contentWidth = maxX - minX + padding * 2;
+    const contentHeight = maxY - minY + padding * 2;
+    
+    const containerRect = containerElement?.getBoundingClientRect();
+    if (!containerRect) return;
+    
+    const viewWidth = containerRect.width;
+    const viewHeight = containerRect.height;
+    
+    const scaleX = viewWidth / contentWidth;
+    const scaleY = viewHeight / contentHeight;
+    const fitScale = Math.min(scaleX, scaleY, 1.5);
+    
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    
+    scale = fitScale;
+    panX = viewWidth / 2 - centerX * scale;
+    panY = viewHeight / 2 - centerY * scale;
+  }
+  
+  let layoutedTree;
+  let nodes = [];
+  let conns = [];
+  
+  $: {
+    layoutedTree = layoutTree($mindMapStore, svgWidth / 2, svgHeight / 2);
+  }
+  
+  $: {
+    const positions = $nodePositions;
+    nodes = $flatNodes.map(node => {
+      const layoutedNode = findNodeById(layoutedTree, node.id);
+      const pos = positions[node.id] ?? { x: layoutedNode?.x ?? 0, y: layoutedNode?.y ?? 0 };
+      return {
+        ...node,
+        x: pos.x,
+        y: pos.y
+      };
+    });
+  }
+  
+  $: {
+    const positions = $nodePositions;
+    conns = $connections.map(conn => {
+      const fromLayouted = findNodeById(layoutedTree, conn.from.id);
+      const toLayouted = findNodeById(layoutedTree, conn.to.id);
+      const fromPos = positions[conn.from.id] ?? { x: fromLayouted?.x ?? 0, y: fromLayouted?.y ?? 0 };
+      const toPos = positions[conn.to.id] ?? { x: toLayouted?.x ?? 0, y: toLayouted?.y ?? 0 };
+      return {
+        from: { ...conn.from, x: fromPos.x, y: fromPos.y },
+        to: { ...conn.to, x: toPos.x, y: toPos.y }
+      };
+    });
+  }
+  
+  onMount(() => {
+    setTimeout(() => {
+      fitToView();
+    }, 50);
   });
 </script>
 
 <main>
   <div 
     class="mind-map-container"
+    bind:this={containerElement}
     on:wheel={handleWheel}
     on:mousedown={handleCanvasMouseDown}
   >
